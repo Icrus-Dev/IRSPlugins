@@ -83,60 +83,60 @@ namespace Oxide.Plugins
             public Int64 CreatedTimestamp;
         }
 
-        public class IRSUserBehavior_ : UnityEngine.MonoBehaviour, IDisposable
-        {
-            public BasePlayer Player = null;
-            public Single LastUpdatedTime = 0;
+        //public class IRSUserBehavior_ : UnityEngine.MonoBehaviour, IDisposable
+        //{
+        //    public BasePlayer Player = null;
+        //    public Single LastUpdatedTime = 0;
 
-            private void Awake()
-            {
-                Player = GetComponent<BasePlayer>();
-            }
-            private void FixedUpdate()
-            {
-                if (Player == null || !Player.IsConnected)
-                {
-                    Dispose();
-                }
-                else
-                {
-                    #region old
-                    ////var time = UnityEngine.Time.realtimeSinceStartup;
-                    ////if (time - LastUpdatedTime >= IRSPlugins.Me._behavior_event_delay)
-                    ////{
+        //    private void Awake()
+        //    {
+        //        Player = GetComponent<BasePlayer>();
+        //    }
+        //    private void FixedUpdate()
+        //    {
+        //        if (Player == null || !Player.IsConnected)
+        //        {
+        //            Dispose();
+        //        }
+        //        else
+        //        {
+        //            #region old
+        //            ////var time = UnityEngine.Time.realtimeSinceStartup;
+        //            ////if (time - LastUpdatedTime >= IRSPlugins.Me._behavior_event_delay)
+        //            ////{
 
-                    ////}
+        //            ////}
 
-                    //// Hammer + Right click
-                    //if (Player.GetActiveItem().info.shortname == "hammer" &&
-                    //    Player.serverInput.WasJustPressed(BUTTON.FIRE_SECONDARY))
-                    //{
-                    //    IRSPlugins.Me.OnHammerRightClick(Player);
-                    //}
+        //            //// Hammer + Right click
+        //            //if (Player.GetActiveItem().info.shortname == "hammer" &&
+        //            //    Player.serverInput.WasJustPressed(BUTTON.FIRE_SECONDARY))
+        //            //{
+        //            //    IRSPlugins.Me.OnHammerRightClick(Player);
+        //            //}
 
-                    //// Update last updated time
-                    //// LastUpdatedTime = time;
-                    #endregion
+        //            //// Update last updated time
+        //            //// LastUpdatedTime = time;
+        //            #endregion
 
-                    // Retrieve item data
-                    var item = Player.GetActiveItem();
+        //            // Retrieve item data
+        //            var item = Player.GetActiveItem();
 
-                    // Check state
-                    if (item != null)
-                    {
-                        // Hammer + Right click
-                        if (Player.GetActiveItem().info.shortname == "hammer" && Player.serverInput.WasJustPressed(BUTTON.FIRE_SECONDARY))
-                        {
-                            IRSPlugins.Me.OnHammerRightClick(Player);
-                        }
-                    }
-                }
-            }
-            public void Dispose()
-            {
-                Destroy(this);
-            }
-        }
+        //            // Check state
+        //            if (item != null)
+        //            {
+        //                // Hammer + Right click
+        //                if (Player.GetActiveItem().info.shortname == "hammer" && Player.serverInput.WasJustPressed(BUTTON.FIRE_SECONDARY))
+        //                {
+        //                    IRSPlugins.Me.OnHammerRightClick(Player);
+        //                }
+        //            }
+        //        }
+        //    }
+        //    public void Dispose()
+        //    {
+        //        Destroy(this);
+        //    }
+        //}
         #endregion
 
         #region Variables
