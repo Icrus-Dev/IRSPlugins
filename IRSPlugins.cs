@@ -500,7 +500,7 @@ namespace Oxide.Plugins
         private Object OnServerMessage(String message, String name)
         {
             // Ignore give message
-            if (IsIgnoreGiveMessageEnabled() && name == "SERVER" && message.Contains("gave themselves"))
+            if (IsIgnoreGiveMessageEnabled() && name == "SERVER" && message.Contains("gave"))
             {
                 var player_name = message.Split(new String[] { "gave" }, StringSplitOptions.None).FirstOrDefault()?.Trim();
                 if (!String.IsNullOrWhiteSpace(player_name))
