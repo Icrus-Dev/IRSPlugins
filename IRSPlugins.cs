@@ -23,7 +23,7 @@ using ProtoBuf;
 
 namespace Oxide.Plugins
 {
-    [Info("IRSPlugins", "Icrus", "0.3.0")]
+    [Info("IRSPlugins", "Icrus", "0.3.2")]
     [Description("Private server plugin package")]
     public class IRSPlugins : RustPlugin
     {
@@ -115,6 +115,7 @@ namespace Oxide.Plugins
 
         // Skin selector
         private Dictionary<Int32, List<UInt64>> _skins;
+        private Dictionary<String, Int32> _item_name_id_pairs;
 
         // Default building grade selector
         private Dictionary<Int32, BuildingGrade.Enum> _building_block_resources;
@@ -162,6 +163,35 @@ namespace Oxide.Plugins
                 _skins = Rust.Workshop.Approved.All
                     .GroupBy(x => ItemManager.itemList.First(y => y.shortname == GetCorrectItemName(x.Value.Skinnable.ItemName)).itemid, x => x.Value.WorkshopdId)
                     .ToDictionary(x => x.Key, x => x.ToList());
+
+                // Create name-id pair cache
+                _item_name_id_pairs = new Dictionary<String, Int32>();
+                foreach (var i in ItemManager.GetItemDefinitions())
+                {
+                    if (i != null)
+                    {
+                        // Add short name - id
+                        if (!_item_name_id_pairs.ContainsKey(i.shortname))
+                        {
+                            _item_name_id_pairs.Add(i.shortname, i.itemid);
+                        }
+
+                        // Add deployable item name - id
+                        var item_deployable = i.GetComponent<ItemModDeployable>();
+                        if (item_deployable != null)
+                        {
+                            String name = item_deployable.entityPrefab.resourcePath.Split('/').LastOrDefault();
+                            if (!String.IsNullOrWhiteSpace(name))
+                            {
+                                name = name.Remove(name.Length - 7, 7);
+                                if (!_item_name_id_pairs.ContainsKey(name))
+                                {
+                                    _item_name_id_pairs.Add(name, i.itemid);
+                                }
+                            }
+                        }
+                    }
+                }
 
                 // Create skin container ui
                 var ui_container = new CuiElementContainer();
@@ -324,14 +354,21 @@ namespace Oxide.Plugins
         }
         private void Unload()
         {
-            // Save user data
+            // Save user data and dispose user object
             foreach (var i in _users)
             {
                 ProtoStorage.Save(i.Value.UserData, "IRSUserData", i.Value.IdString);
+                i.Value.Dispose();
             }
 
             // Save server data
             SaveServerData();
+
+            // Finalize
+            _users.Clear();
+            _skins.Clear();
+            _item_name_id_pairs.Clear();
+            _building_block_resources.Clear();
         }
         private void OnServerInitialized()
         {
@@ -687,21 +724,21 @@ namespace Oxide.Plugins
         }
         private void OnPlayerInput(BasePlayer player, InputState input)
         {
-            // Open skin container ui using hammer with right click
+            // Open skin container ui using hammer or toolgun with right click
             if (IsSkinEnabled())
             {
                 // Retrieve active item
                 var item = player.GetActiveItem();
 
-                // Open skin container ui using hammer
-                if (item != null && item.info.shortname.Contains("hammer") && input.WasJustPressed(BUTTON.FIRE_SECONDARY))
+                // Open skin container ui using hammer or toolgun
+                if (item != null && (item.info.shortname.Contains("hammer") || item.info.shortname.Contains("toolgun")) && input.WasJustPressed(BUTTON.FIRE_SECONDARY))
                 {
                     var entity = GetHeadEntity(player);
                     if (entity != null)
                     {
-                        if (_users.ContainsKey(player.userID) && entity != null)
+                        if (_users.ContainsKey(player.userID) && entity != null && _item_name_id_pairs.ContainsKey(entity.ShortPrefabName))
                         {
-                            item = ItemManager.CreateByName(entity.ShortPrefabName);
+                            item = ItemManager.CreateByItemID(_item_name_id_pairs[entity.ShortPrefabName]);
                             if (item != null)
                             {
                                 if (_skins.ContainsKey(item.info.itemid))
@@ -798,7 +835,7 @@ namespace Oxide.Plugins
                 OpenSkinContainerUI(player);
             }
         }
-        [ChatCommand("build_grade")]
+        [ChatCommand("build_grade")]    
         private void TrySetDefaultBuildingGrade(BasePlayer player, String command, String[] args)
         {
             if (IsDefaultBuildingBlockGradeEnabled() && _users.ContainsKey(player.userID))
@@ -918,6 +955,7 @@ namespace Oxide.Plugins
                 return name;
             }
         }
+
         private void ClosePlayerInventoryUI(BasePlayer player)
         {
             // References : https://oxidemod.org/threads/closing-players-inventory.7523/
