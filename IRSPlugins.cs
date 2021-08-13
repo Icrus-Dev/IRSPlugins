@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System.Linq;
 using System.Text;
+using System.Reflection;
 
 using Oxide.Core;
 using Oxide.Core.Libraries.Covalence;
@@ -22,12 +23,12 @@ using ProtoBuf;
 
 namespace Oxide.Plugins
 {
-    [Info("IRSPlugins", "Icrus", "0.2.0")]
+    [Info("IRSPlugins", "Icrus", "0.3.0")]
     [Description("Private server plugin package")]
     public class IRSPlugins : RustPlugin
     {
         #region Classes
-        public class IRSUser
+        public class IRSUser : IDisposable
         {
             // Commons
             public BasePlayer Player { private set; get; }
@@ -52,18 +53,28 @@ namespace Oxide.Plugins
             public BaseEntity SkinTargetEntity = null;
             public Int32 SkinPanelPage = 1;
 
+            public ItemContainer BuildingBlockResourceContainer = null;
+            public Boolean IsBuildingGradePanelVisible = false;
+
             // Constructor
             public IRSUser(BasePlayer player)
             {
                 Player = player;
+            }
+
+            // Dispose
+            public void Dispose()
+            {
+                SkinContainer.Clear();
+                BuildingBlockResourceContainer.Clear();
             }
         }
 
         [ProtoContract]
         public class IRSUserData
         {
-            // Default skins
-            public Dictionary<UInt64, UInt64> DefaultSkins = new Dictionary<UInt64, UInt64>();
+            [ProtoMember(1)]
+            public BuildingGrade.Enum DefaultBuildingBlock = BuildingGrade.Enum.Twigs;
         }
 
         [ProtoContract]
@@ -82,61 +93,6 @@ namespace Oxide.Plugins
             [ProtoMember(2)]
             public Int64 CreatedTimestamp;
         }
-
-        //public class IRSUserBehavior_ : UnityEngine.MonoBehaviour, IDisposable
-        //{
-        //    public BasePlayer Player = null;
-        //    public Single LastUpdatedTime = 0;
-
-        //    private void Awake()
-        //    {
-        //        Player = GetComponent<BasePlayer>();
-        //    }
-        //    private void FixedUpdate()
-        //    {
-        //        if (Player == null || !Player.IsConnected)
-        //        {
-        //            Dispose();
-        //        }
-        //        else
-        //        {
-        //            #region old
-        //            ////var time = UnityEngine.Time.realtimeSinceStartup;
-        //            ////if (time - LastUpdatedTime >= IRSPlugins.Me._behavior_event_delay)
-        //            ////{
-
-        //            ////}
-
-        //            //// Hammer + Right click
-        //            //if (Player.GetActiveItem().info.shortname == "hammer" &&
-        //            //    Player.serverInput.WasJustPressed(BUTTON.FIRE_SECONDARY))
-        //            //{
-        //            //    IRSPlugins.Me.OnHammerRightClick(Player);
-        //            //}
-
-        //            //// Update last updated time
-        //            //// LastUpdatedTime = time;
-        //            #endregion
-
-        //            // Retrieve item data
-        //            var item = Player.GetActiveItem();
-
-        //            // Check state
-        //            if (item != null)
-        //            {
-        //                // Hammer + Right click
-        //                if (Player.GetActiveItem().info.shortname == "hammer" && Player.serverInput.WasJustPressed(BUTTON.FIRE_SECONDARY))
-        //                {
-        //                    IRSPlugins.Me.OnHammerRightClick(Player);
-        //                }
-        //            }
-        //        }
-        //    }
-        //    public void Dispose()
-        //    {
-        //        Destroy(this);
-        //    }
-        //}
         #endregion
 
         #region Variables
@@ -154,9 +110,14 @@ namespace Oxide.Plugins
         private String _message_password_mask;
 
         // Custom UI
-        private IEnumerable<IGrouping<Int32?, UInt64>> _skins;
         private String _skin_container_ui;
         private Int32 _skin_container_page_position;
+
+        // Skin selector
+        private Dictionary<Int32, List<UInt64>> _skins;
+
+        // Default building grade selector
+        private Dictionary<Int32, BuildingGrade.Enum> _building_block_resources;
 
         #endregion
 
@@ -183,16 +144,24 @@ namespace Oxide.Plugins
                 Int32 length = Config["AuthPassword"].ToString().Length;
                 _message_password_mask = new StringBuilder(length).Insert(0, "*", length).ToString();
             }
-            else
-            {
-                _message_password_mask = String.Empty;
-            }
 
+            // Skin selector
             if (IsSkinEnabled())
             {
+                // Reload workshop skin list if not loaded using reflection
+                if (Rust.Workshop.Approved.All.Count == 0)
+                {
+                    var method = typeof(Rust.Workshop.Approved).GetMethod("Initialize", BindingFlags.Static | BindingFlags.NonPublic);
+                    if (method != null)
+                    {
+                        method.Invoke(null, null);
+                    }
+                }
+
                 // Create skin cache
                 _skins = Rust.Workshop.Approved.All
-                    .GroupBy(x => ItemManager.itemList.FirstOrDefault(y => y.shortname == x.Value.Skinnable.ItemName)?.itemid, x => x.Value.WorkshopdId);
+                    .GroupBy(x => ItemManager.itemList.First(y => y.shortname == GetCorrectItemName(x.Value.Skinnable.ItemName)).itemid, x => x.Value.WorkshopdId)
+                    .ToDictionary(x => x.Key, x => x.ToList());
 
                 // Create skin container ui
                 var ui_container = new CuiElementContainer();
@@ -342,14 +311,24 @@ namespace Oxide.Plugins
                 AddCovalenceCommand("_skin_next", nameof(TryLoadSkinContainerNextPage));
             }
 
+            // Default building block grade selector
+            if (IsDefaultBuildingBlockGradeEnabled())
+            {
+                _building_block_resources = new Dictionary<Int32, BuildingGrade.Enum>();
+                _building_block_resources.Add(-151838493, BuildingGrade.Enum.Wood);
+                _building_block_resources.Add(-2099697608, BuildingGrade.Enum.Stone);
+                _building_block_resources.Add(69511070, BuildingGrade.Enum.Metal);
+                _building_block_resources.Add(317398316, BuildingGrade.Enum.TopTier);
+            }
+
         }
         private void Unload()
         {
-            // Remove user behavior component
-            //foreach (var i in UnityEngine.Object.FindObjectsOfType<IRSUserBehavior>())
-            //{
-            //    UnityEngine.GameObject.Destroy(i);
-            //}
+            // Save user data
+            foreach (var i in _users)
+            {
+                ProtoStorage.Save(i.Value.UserData, "IRSUserData", i.Value.IdString);
+            }
 
             // Save server data
             SaveServerData();
@@ -428,7 +407,7 @@ namespace Oxide.Plugins
             }
 
             // Retrieve user data
-            if (!ProtoStorage.Exists("users", player.UserIDString))
+            if (!ProtoStorage.Exists("IRSUserData", player.UserIDString))
             {
                 _users[player.userID].UserData = new IRSUserData();
                 ProtoStorage.Save(_users[player.userID].UserData, "IRSUserData", player.UserIDString);
@@ -455,23 +434,31 @@ namespace Oxide.Plugins
                 _users[player.userID].SkinContainer.GiveUID();
             }
 
-            // Add user behavior component
-            //if (user.Player.gameObject.GetComponent<IRSUserBehavior>() == null)
-            //{
-            //    user.Player.gameObject.AddComponent<IRSUserBehavior>();
-            //}
+            // Create building block resource container
+            if (IsDefaultBuildingBlockGradeEnabled())
+            {
+                _users[player.userID].BuildingBlockResourceContainer = new ItemContainer();
+                _users[player.userID].BuildingBlockResourceContainer.entityOwner = player;
+                _users[player.userID].BuildingBlockResourceContainer.capacity = 42;
+                _users[player.userID].BuildingBlockResourceContainer.isServer = true;
+                _users[player.userID].BuildingBlockResourceContainer.allowedContents = ItemContainer.ContentsType.Generic;
+                _users[player.userID].BuildingBlockResourceContainer.GiveUID();
+
+                foreach (var i in _building_block_resources)
+                {
+                    AddItemToContainer(ItemManager.CreateByItemID(i.Key), _users[player.userID].BuildingBlockResourceContainer);
+                }
+            }
         }
         private void OnPlayerDisconnected(BasePlayer player)
         {
             if (_users.ContainsKey(player.userID))
             {
-                // Remove user behavior component
-                //user.Player.gameObject.GetComponent<IRSUserBehavior>()?.Dispose();
-
                 // Save user data
                 ProtoStorage.Save(_users[player.userID].UserData, "IRSUserData", player.UserIDString);
 
                 // Remove user object
+                _users[player.userID].Dispose();
                 _users.Remove(player.userID);
             }
         }
@@ -524,7 +511,7 @@ namespace Oxide.Plugins
         }
         private void OnEntitySpawned(BaseNetworkable entity)
         {
-            if (entity != null && entity.net != null &&  entity is BuildingBlock)
+            if (entity != null && entity.net != null && entity is BuildingBlock)
             {
                 // Retrieve building block
                 var block = entity as BuildingBlock;
@@ -537,6 +524,18 @@ namespace Oxide.Plugins
                         BuildingId = block.buildingID,
                         CreatedTimestamp = GetCurrentTimestamp(),
                     });
+                }
+            }
+        }
+        private void OnEntityBuilt(Planner plan, UnityEngine.GameObject obj)
+        {
+            // Upgrade building block
+            if (IsDefaultBuildingBlockGradeEnabled())
+            {
+                var block = obj.GetComponent<BuildingBlock>();
+                if (block != null && _users.ContainsKey(block.OwnerID) && _users[block.OwnerID].UserData.DefaultBuildingBlock != BuildingGrade.Enum.Twigs)
+                {
+                    UpgradeBuildingBlock(_users[block.OwnerID].Player, block, _users[block.OwnerID].UserData.DefaultBuildingBlock);
                 }
             }
         }
@@ -553,78 +552,104 @@ namespace Oxide.Plugins
         }
         private object CanMoveItem(Item item, PlayerInventory inventory, uint target_container, int target_slot, int amount)
         {
-            // Skin load using right click, drag
+            // Item right click or drag situation
             if (item != null && inventory != null)
             {
                 var player = inventory._baseEntity;
-                if (player != null && _users.ContainsKey(player.userID) && _users[player.userID].IsSkinPanelVisible)
+                if (player != null && _users.ContainsKey(player.userID))
                 {
-                    if (_users[player.userID].IsSkinHammerMode)
+                    // Skin panel
+                    if (_users[player.userID].IsSkinPanelVisible)
                     {
-                        // Ignore skin container update
-                        if (target_container == _users[player.userID].SkinContainer.uid)
+                        if (_users[player.userID].IsSkinHammerMode)
                         {
-                            return true;
-                        }
+                            // Ignore skin container update
+                            if (target_container == _users[player.userID].SkinContainer.uid)
+                            {
+                                return true;
+                            }
 
-                        // From skin container
-                        ItemContainer container = item.GetRootContainer();
-                        if (container == null)
-                        {
-                            // Apply skin on entity
-                            _users[player.userID].SkinTargetEntity.skinID = item.skin;
-                            _users[player.userID].SkinTargetEntity.SendNetworkUpdateImmediate();
-
-                            // Close skin container ui
-                            CloseSkinContainerUI(player);
-
-                            // Ignore move item
-                            return true;
-                        }
-                    }
-                    else
-                    {
-                        // Player container to skin container
-                        if (target_container == _users[player.userID].SkinContainer.uid)
-                        {
-                            // Update skin container contents
-                            UpdateSkinContainer(player, item, 1);
-
-                            // Ignore move item
-                            return true;
-                        }
-                        else
-                        {
-                            // Skin container to player container
+                            // From skin container
                             ItemContainer container = item.GetRootContainer();
                             if (container == null)
                             {
-                                // Apply skin on item
-                                _users[player.userID].SkinTargetItem.skin = item.skin;
-                                _users[player.userID].SkinTargetItem.MarkDirty();
-                                if (_users[player.userID].SkinTargetItem.info.itemMods != null)
-                                {
-                                    foreach (var i in _users[player.userID].SkinTargetItem.info.itemMods)
-                                    {
-                                        if (i != null)
-                                        {
-                                            i.OnParentChanged(_users[player.userID].SkinTargetItem);
-                                        }
-                                    }
-                                }
-
                                 // Apply skin on entity
-                                BaseEntity entity = _users[player.userID].SkinTargetItem.GetHeldEntity();
-                                if (entity != null)
-                                {
-                                    entity.skinID = item.skin;
-                                    entity.SendNetworkUpdateImmediate();
-                                }
+                                _users[player.userID].SkinTargetEntity.skinID = item.skin;
+                                _users[player.userID].SkinTargetEntity.SendNetworkUpdateImmediate();
+
+                                /* BUG */
+                                // DETAIL : 기본 스킨으로 리셋 시 Null texture로 로딩되는 현상 존재
+                                // DETAIL : 캐릭터를 움직여 Entity Reload를 유도하면 기존 스킨으로 표시됨
+                                // REQUIRED : 자체적으로 Entity Reload를 유도할 수 있는 방법 필요
+                                /* BUG */
+
+                                // Close skin container ui
+                                CloseSkinContainerUI(player, true);
 
                                 // Ignore move item
                                 return true;
                             }
                         }
+                        else
+                        {
+                            // Player container to skin container
+                            if (target_container == _users[player.userID].SkinContainer.uid)
+                            {
+                                // Update skin container contents
+                                UpdateSkinContainer(player, item, 1);
+
+                                // Ignore move item
+                                return true;
+                            }
+                            else
+                            {
+                                // Skin container to player container
+                                ItemContainer container = item.GetRootContainer();
+                                if (container == null)
+                                {
+                                    // Apply skin on item
+                                    _users[player.userID].SkinTargetItem.skin = item.skin;
+                                    _users[player.userID].SkinTargetItem.MarkDirty();
+                                    if (_users[player.userID].SkinTargetItem.info.itemMods != null)
+                                    {
+                                        foreach (var i in _users[player.userID].SkinTargetItem.info.itemMods)
+                                        {
+                                            if (i != null)
+                                            {
+                                                i.OnParentChanged(_users[player.userID].SkinTargetItem);
+                                            }
+                                        }
+                                    }
+
+                                    // Apply skin on entity
+                                    BaseEntity entity = _users[player.userID].SkinTargetItem.GetHeldEntity();
+                                    if (entity != null)
+                                    {
+                                        entity.skinID = item.skin;
+                                        entity.SendNetworkUpdateImmediate();
+                                    }
+
+                                    // Ignore move item
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+
+                    // Building grade panel
+                    else if (_users[player.userID].IsBuildingGradePanelVisible)
+                    {
+                        // Set default building block grade
+                        _users[player.userID].UserData.DefaultBuildingBlock = _building_block_resources[item.info.itemid];
+
+                        // Show message
+                        ShowMessage(player, "DefaultBuildingBlockGradeSet", _users[player.userID].UserData.DefaultBuildingBlock);
+
+                        // Close building grade panel
+                        CloseBuildingGradeUI(player, true);
+
+                        // Ignore move item
+                        return true;
                     }
                 }
             }
@@ -647,34 +672,59 @@ namespace Oxide.Plugins
             if (loot != null && loot.entitySource != null && loot.entitySource is BasePlayer)
             {
                 var player = loot.entitySource as BasePlayer;
-                if (_users.ContainsKey(player.userID) && _users[player.userID].IsSkinPanelVisible && !_users[player.userID].IsSkinPanelUpdating)
+                if (_users.ContainsKey(player.userID))
                 {
-                    CloseSkinContainerUI(player);
+                    if (_users[player.userID].IsSkinPanelVisible && !_users[player.userID].IsSkinPanelUpdating)
+                    {
+                        CloseSkinContainerUI(player);
+                    }
+                    if (_users[player.userID].IsBuildingGradePanelVisible)
+                    {
+                        CloseBuildingGradeUI(player);
+                    }
                 }
             }
         }
-        private object OnHammerHit(BasePlayer player, HitInfo info)
+        private void OnPlayerInput(BasePlayer player, InputState input)
         {
-            // Open skin container ui using hammer
-            if (_users.ContainsKey(player.userID) && info.HitEntity != null && info.HitEntity.Health() == info.HitEntity.MaxHealth())
+            // Open skin container ui using hammer with right click
+            if (IsSkinEnabled())
             {
-                var item = ItemManager.CreateByName(info.HitEntity.ShortPrefabName);
-                if (item != null)
+                // Retrieve active item
+                var item = player.GetActiveItem();
+
+                // Open skin container ui using hammer
+                if (item != null && item.info.shortname.Contains("hammer") && input.WasJustPressed(BUTTON.FIRE_SECONDARY))
                 {
-                    // Set hammer mode flag
-                    _users[player.userID].IsSkinHammerMode = true;
+                    var entity = GetHeadEntity(player);
+                    if (entity != null)
+                    {
+                        if (_users.ContainsKey(player.userID) && entity != null)
+                        {
+                            item = ItemManager.CreateByName(entity.ShortPrefabName);
+                            if (item != null)
+                            {
+                                if (_skins.ContainsKey(item.info.itemid))
+                                {
+                                    // Set hammer mode flag
+                                    _users[player.userID].IsSkinHammerMode = true;
 
-                    // Set target entity
-                    _users[player.userID].SkinTargetEntity = info.HitEntity;
+                                    // Set target entity
+                                    _users[player.userID].SkinTargetEntity = entity;
 
-                    // Open skin container ui
-                    OpenSkinContainerUI(player, item);
+                                    // Open skin container ui
+                                    OpenSkinContainerUI(player, item);
+                                }
+                                else
+                                {
+                                    ShowMessage(player, "SkinNotFound");
+                                }
+                            }
+                        }
+                    }
                 }
-
-                return true;
             }
 
-            return null;
         }
         #endregion
 
@@ -748,6 +798,60 @@ namespace Oxide.Plugins
                 OpenSkinContainerUI(player);
             }
         }
+        [ChatCommand("build_grade")]
+        private void TrySetDefaultBuildingGrade(BasePlayer player, String command, String[] args)
+        {
+            if (IsDefaultBuildingBlockGradeEnabled() && _users.ContainsKey(player.userID))
+            {
+                OpenBuildingGradeUI(player);
+            }
+        }
+        [ChatCommand("build_grade_reset")]
+        private void TryResetDefaultBuildingGrade(BasePlayer player, String command, String[] args)
+        {
+            if (IsDefaultBuildingBlockGradeEnabled() && _users.ContainsKey(player.userID))
+            {
+                // Reset default building block grade
+                _users[player.userID].UserData.DefaultBuildingBlock = BuildingGrade.Enum.Twigs;
+
+                // Show reset message
+                ShowMessage(player, "DefaultBuildingBlockGradeReset");
+            }
+        }
+
+        // 테스트용
+        [ChatCommand("skinid")]
+        private void TryRetrieveSkinId(BasePlayer player, String command, String[] args)
+        {
+            if (IsAdmin(player))
+            {
+                var item = player.GetActiveItem();
+                if (item != null)
+                {
+                    var entity = item.GetHeldEntity();
+                    if (entity != null)
+                    {
+                        PrintToChat(player, $"Name : {item.info.shortname}, ItemId : {item.info.itemid}, ItemSkin : {item.skin}, EntitySkin : {entity.skinID}");
+                    }
+                    else
+                    {
+                        PrintToChat(player, "No entity");
+                    }
+                }
+                else
+                {
+                    PrintToChat(player, "No item");
+                }
+            }
+        }
+        [ChatCommand("build_grade_show")]
+        private void TryRetrieveBuildGrade(BasePlayer player, String command, String[] args)
+        {
+            if (IsAdmin(player) && _users.ContainsKey(player.userID))
+            {
+                PrintToChat(player, _users[player.userID].UserData.DefaultBuildingBlock.ToString());
+            }
+        }
         #endregion
 
         #region ConsoleCommands
@@ -774,10 +878,6 @@ namespace Oxide.Plugins
         #endregion
 
         #region Helpers
-        private Boolean IsAdmin(BasePlayer player)
-        {
-            return player.net.connection.authLevel == 2;
-        }
         private Boolean IsAuthEnabled()
         {
             return !String.IsNullOrEmpty((String)Config["AuthPassword"]);
@@ -790,10 +890,38 @@ namespace Oxide.Plugins
         {
             return (Boolean)Config["SkinEnabled"];
         }
+        private Boolean IsDefaultBuildingBlockGradeEnabled()
+        {
+            return (Boolean)Config["DefaultBuildingBlockGradeEnabled"];
+        }
+        private Boolean IsAdmin(BasePlayer player)
+        {
+            return player.net.connection.authLevel == 2;
+        }
+        private Boolean CanUpgradeBuildingBlock(BasePlayer player, BuildingBlock block, BuildingGrade.Enum grade)
+        {
+            return player.CanInteract() && block.CanChangeToGrade(grade, player) && block.CanAffordUpgrade(grade, player) && block.SecondsSinceAttacked >= 30.0;
+        }
 
         private Int64 GetCurrentTimestamp()
         {
             return DateTime.Now.Ticks / 10000000;
+        }
+        private String GetCorrectItemName(String name)
+        {
+            if (name == "lr300.item")
+            {
+                return "rifle.lr300";
+            }
+            else
+            {
+                return name;
+            }
+        }
+        private void ClosePlayerInventoryUI(BasePlayer player)
+        {
+            // References : https://oxidemod.org/threads/closing-players-inventory.7523/
+            player.ClientRPC(null, "OnRespawnInformation", new RespawnInformation { spawnOptions = new List<RespawnInformation.SpawnOptions>() }.ToProtoBytes());
         }
 
         private void AuthProcess(UInt64 player_id)
@@ -829,7 +957,7 @@ namespace Oxide.Plugins
             else
             {
                 block.CancelInvoke(block.StopBeingDemolishable);
-                block.SetFlag(BaseEntity.Flags.Reserved2, true, false); // Reserved2 : Demolishable
+                block.SetFlag(BaseEntity.Flags.Reserved2, true, false); // Reserved2 : Demolishable?
                 if (seconds > 0f)
                 {
                     block.Invoke(block.StopBeingDemolishable, seconds);
@@ -845,7 +973,7 @@ namespace Oxide.Plugins
             else
             {
                 block.CancelInvoke(block.StopBeingRotatable);
-                block.SetFlag(BaseEntity.Flags.Reserved1, true, false); // Reserved1 : Rotatable
+                block.SetFlag(BaseEntity.Flags.Reserved1, true, false); // Reserved1 : Rotatable?
                 if (seconds > 0f)
                 {
                     block.Invoke(block.StopBeingRotatable, seconds);
@@ -859,25 +987,22 @@ namespace Oxide.Plugins
             {
                 player.Invoke(() =>
                 {
-                    // Prepare empty skin container
+                    // Prepare skin container
                     UpdateSkinContainer(player, item);
 
                     // Send RPC_OpenLootPanel
                     player.ClientRPCPlayer(null, player, "RPC_OpenLootPanel", "GenericLarge"); // Generic : 36, GenericLarge : 42
 
+                    // Set skin container visibility
                     if (_users.ContainsKey(player.userID))
                     {
-                        // Set skin container visibility
                         _users[player.userID].IsSkinPanelVisible = true;
-
-                        // Reset skin container page
-                        _users[player.userID].SkinPanelPage = 1;
                     }
 
                 }, 0.25f);
             }
         }
-        private void CloseSkinContainerUI(BasePlayer player)
+        private void CloseSkinContainerUI(BasePlayer player, Boolean close_inventory = false)
         {
             if (_users.ContainsKey(player.userID))
             {
@@ -888,6 +1013,11 @@ namespace Oxide.Plugins
                 _users[player.userID].SkinPanelPage = 1;
 
                 // Reset skin container target item
+                if (_users[player.userID].IsSkinHammerMode)
+                {
+                    _users[player.userID].SkinTargetItem.Remove();
+                }
+
                 _users[player.userID].SkinTargetItem = null;
 
                 // Reset skin container target entity
@@ -901,6 +1031,12 @@ namespace Oxide.Plugins
                 
                 // Reset skin container visibility
                 _users[player.userID].IsSkinPanelVisible = false;
+
+                // Close inventory ui
+                if (close_inventory)
+                {
+                    ClosePlayerInventoryUI(player);
+                }
             }
         }
         private void DrawSkinContainerUI(BasePlayer player, Int32 page, Int32 page_max)
@@ -924,8 +1060,8 @@ namespace Oxide.Plugins
 
             // Update skin container
             Int32 page_max;
-            IGrouping<Int32?, UInt64> item_skins;
-            if (item == null || (item_skins = _skins.FirstOrDefault((x) => x.Key == item.info.itemid)) == null)
+            List<UInt64> item_skins;
+            if (item == null || !_skins.TryGetValue(item.info.itemid, out item_skins))
             {
                 // Set max page
                 page_max = 1;
@@ -988,13 +1124,13 @@ namespace Oxide.Plugins
                 // Add Default skin if page is 1
                 if (page == 1)
                 {
-                    AddItemToContainer(DuplicateItem(item, 1, 0), _users[player.userID].SkinContainer);
+                    AddItemToContainer(DuplicateItem(item), _users[player.userID].SkinContainer);
                 }
 
                 // Add skins
                 foreach (var i in skins)
                 {
-                    AddItemToContainer(DuplicateItem(item, 1, i), _users[player.userID].SkinContainer);
+                    AddItemToContainer(DuplicateItem(item, skin_id: i), _users[player.userID].SkinContainer);
                 }
             }
 
@@ -1058,6 +1194,67 @@ namespace Oxide.Plugins
                 i.OnParentChanged(item);
             }
         }
+
+        private void OpenBuildingGradeUI(BasePlayer player)
+        {
+            if (_users.ContainsKey(player.userID) && !_users[player.userID].IsBuildingGradePanelVisible)
+            {
+                player.Invoke(() =>
+                {
+                    // Prepare building block resource container
+                    player.inventory.loot.Clear();
+                    player.inventory.loot.PositionChecks = false;
+                    player.inventory.loot.entitySource = player;
+                    player.inventory.loot.itemSource = null;
+                    player.inventory.loot.AddContainer(_users[player.userID].BuildingBlockResourceContainer);
+                    player.inventory.loot.SendImmediate();
+
+                    // Send RPC_OpenLootPanel
+                    player.ClientRPCPlayer(null, player, "RPC_OpenLootPanel", "GenericLarge"); // Generic : 36, GenericLarge : 42
+
+                    // Set building block resource container visibility
+                    if (_users.ContainsKey(player.userID))
+                    {
+                        _users[player.userID].IsBuildingGradePanelVisible = true;
+                    }
+
+                }, 0.25f);
+            }
+        }
+        private void CloseBuildingGradeUI(BasePlayer player, Boolean close_inventory = false)
+        {
+            if (_users.ContainsKey(player.userID))
+            {
+                // Reset skin container visibility
+                _users[player.userID].IsBuildingGradePanelVisible = false;
+
+                // Close inventory ui
+                if (close_inventory)
+                {
+                    ClosePlayerInventoryUI(player);
+                }
+            }
+        }
+        private void UpgradeBuildingBlock(BasePlayer player, BuildingBlock block, BuildingGrade.Enum grade)
+        {
+            if (CanUpgradeBuildingBlock(player, block, grade) && Interface.CallHook("OnStructureUpgrade", block, player, grade) == null)
+            {
+                var grade_construction = block.GetGrade(grade);
+                if (grade_construction != null)
+                {
+                    block.PayForUpgrade(grade_construction, player);
+                    block.SetGrade(grade);
+                    block.SetHealthToMax();
+                    block.StartBeingRotatable();
+                    block.SendNetworkUpdate();
+                    block.UpdateSkin();
+                    block.ResetUpkeepTime();
+                    block.UpdateSurroundingEntities();
+                    BuildingManager.server.GetBuilding(block.buildingID)?.Dirty();
+                    Effect.server.Run("assets/bundled/prefabs/fx/build/promote_" + grade.ToString().ToLower() + ".prefab", block, 0U, UnityEngine.Vector3.zero, UnityEngine.Vector3.zero);
+                }
+            }
+        }
         
         private BaseEntity GetHeadEntity(BasePlayer player)
         {
@@ -1087,6 +1284,12 @@ namespace Oxide.Plugins
             // Skins
             Config["SkinEnabled"] = Config["SkinEnabled"] ?? true;
 
+            // Default building block grade
+            Config["DefaultBuildingBlockGradeEnabled"] = Config["DefaultBuildingBlockGradeEnabled"] ?? true;
+
+            // TODO : Building privilege expansion
+            Config["PrivilegeExpansionEnabled"] = Config["PrivilegeExpansionEnabled"] ?? true;
+
             SaveConfig();
         }
         protected override void LoadDefaultMessages()
@@ -1094,6 +1297,8 @@ namespace Oxide.Plugins
             // Register english messages
             lang.RegisterMessages(new Dictionary<String, String>
             {
+                ["ObjectNotOwned"] = "That object isn't owned to you.",
+
                 ["Auth"] = "Type '/auth [Password]' in the following {0} seconds to authenticate",
                 ["AuthInvalid"] = "Invalid syntax. Type '/auth [Password]'.",
                 ["AuthIncorrectPassword"] = "Incorrect password. You have {0} retries left.",
@@ -1104,19 +1309,17 @@ namespace Oxide.Plugins
                 ["AuthWhitelist"] = "Authentication successful (Whitelist user)",
                 ["AuthChatForbidden"] = "You can't chat before authentication.",
 
-                ["ObjectNotOwned"] = "That object isn't owned to you.",
-
-                ["SkinInvalidCommand"] = "Invalid command. Type '/skin [SkinId]'.",
                 ["SkinNotFound"] = "Skin not found.",
-                ["SkinInvalidSkin"] = "This skin can't apply on current active item.",
-                ["SkinActiveItemNotFound"] = "Active item not found. Hold item you want to apply.",
-                ["SkinSuccess"] = "Applied to item successfully.",
-                ["UnskinActiveItemNotFound"] = "Active item not found. Hold item you want to remove.",
+
+                ["DefaultBuildingBlockGradeSet"] = "Default building block grade changed to '{0}' successfully.",
+                ["DefaultBuildingBlockGradeReset"] = "Reset default building block grade successfully.",
             }, this, "en");
 
             // Register korean messages
             lang.RegisterMessages(new Dictionary<String, String>
             {
+                ["ObjectNotOwned"] = "해당 개체는 당신 소유가 아닙니다.",
+
                 ["Auth"] = "인증을 위해 {0}초 내로 '/auth [패스워드]' 형태로 패스워드를 입력해주세요.",
                 ["AuthInvalid"] = "잘못된 입력입니다. '/auth [패스워드]' 형태로 패스워드를 입력해주세요.",
                 ["AuthIncorrectPassword"] = "잘못된 패스워드입니다. 입력 가능 횟수가 {0}회 남았습니다.",
@@ -1127,14 +1330,10 @@ namespace Oxide.Plugins
                 ["AuthWhitelist"] = "자동으로 인증되었습니다. (화이트리스트 유저)",
                 ["AuthChatForbidden"] = "인증 전까지 채팅을 칠 수 없습니다.",
 
-                ["ObjectNotOwned"] = "해당 개체는 당신 소유가 아닙니다.",
-
-                ["SkinInvalidCommand"] = "잘못된 입력입니다. '/skin [SkinId]' 형태로 입력해주세요.",
                 ["SkinNotFound"] = "스킨을 찾을 수 없습니다.",
-                ["SkinInvalidSkin"] = "이 스킨은 현재 들고 있는 아이템에 적용할 수 없습니다.",
-                ["SkinActiveItemNotFound"] = "들고 있는 아이템이 없습니다. 적용하고 싶은 아이템을 들고 다시 시도해주세요.",
-                ["SkinSuccess"] = "아이템에 성공적으로 적용되었습니다.",
-                ["UnskinActiveItemNotFound"] = "들고 있는 아이템이 없습니다. 되돌리고 싶은 아이템을 들고 다시 시도해주세요.",
+
+                ["DefaultBuildingBlockGradeSet"] = "건설되는 블록의 기본 등급이 '{0}' 로 성공적으로 적용되었습니다.",
+                ["DefaultBuildingBlockGradeReset"] = "건설되는 블록의 기본 등급이 성공적으로 초기화되었습니다.",
             }, this, "ko");
         }
         private void LoadDefaultServerData()
