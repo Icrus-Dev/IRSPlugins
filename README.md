@@ -8,7 +8,7 @@ Oxide plugin package for private rust dedicated server
 - ✔️ Set default building block grade ('/build_grade', '/build_grade_reset')
 - ✔️ Skin selector
   - Item : use '/skin' command
-  - Deployed entity : right click with hammer
+  - Deployed entity : right click with hammer or toolgun
 
 # Known issues
 - 🛠️ Skin selector : Texture loading failure when select default skin
