@@ -23,7 +23,7 @@ using ProtoBuf;
 
 namespace Oxide.Plugins
 {
-    [Info("IRSPlugins", "Icrus", "0.3.2")]
+    [Info("IRSPlugins", "Icrus", "0.3.3")]
     [Description("Private server plugin package")]
     public class IRSPlugins : RustPlugin
     {
@@ -138,7 +138,27 @@ namespace Oxide.Plugins
             // Head entity config
             _max_distance = 200f;
             _layer_mask = UnityEngine.LayerMask.GetMask("Construction", "Deployed", "Default");
+        }
+        private void Unload()
+        {
+            // Save user data and dispose user object
+            foreach (var i in _users)
+            {
+                ProtoStorage.Save(i.Value.UserData, "IRSUserData", i.Value.IdString);
+                i.Value.Dispose();
+            }
 
+            // Save server data
+            SaveServerData();
+
+            // Finalize
+            _users.Clear();
+            _skins.Clear();
+            _item_name_id_pairs.Clear();
+            _building_block_resources.Clear();
+        }
+        private void OnServerInitialized()
+        {
             // Authentication
             if (IsAuthEnabled())
             {
@@ -351,27 +371,6 @@ namespace Oxide.Plugins
                 _building_block_resources.Add(317398316, BuildingGrade.Enum.TopTier);
             }
 
-        }
-        private void Unload()
-        {
-            // Save user data and dispose user object
-            foreach (var i in _users)
-            {
-                ProtoStorage.Save(i.Value.UserData, "IRSUserData", i.Value.IdString);
-                i.Value.Dispose();
-            }
-
-            // Save server data
-            SaveServerData();
-
-            // Finalize
-            _users.Clear();
-            _skins.Clear();
-            _item_name_id_pairs.Clear();
-            _building_block_resources.Clear();
-        }
-        private void OnServerInitialized()
-        {
             // Player relative process
             foreach (var i in BasePlayer.activePlayerList)
             {
