@@ -23,7 +23,7 @@ using ProtoBuf;
 
 namespace Oxide.Plugins
 {
-    [Info("IRSPlugins", "Icrus", "0.3.3")]
+    [Info("IRSPlugins", "Icrus", "0.3.4")]
     [Description("Private server plugin package")]
     public class IRSPlugins : RustPlugin
     {
@@ -378,8 +378,6 @@ namespace Oxide.Plugins
             }
 
             // Entity relative process
-            Int32 time_sec;
-            Int64 time_diff;
             foreach (var i in BaseEntity.saveList)
             {
                 // Check building block
@@ -391,46 +389,8 @@ namespace Oxide.Plugins
                     // Register building block
                     OnEntitySpawned(block);
 
-                    // Set demolishable state
-                    time_sec = Convert.ToInt32(Config["BuildDemolishableTimeSec"]);
-                    if (time_sec < 0)
-                    {
-                        SetDemolishableTime(block, time_sec);
-                    }
-                    else
-                    {
-                        time_diff = time_sec - (GetCurrentTimestamp() - _server.BuildingBlocks[block.net.ID].CreatedTimestamp);
-                        if (time_diff > 0)
-                        {
-                            SetDemolishableTime(block, time_diff);
-                        }
-                        else
-                        {
-                            block.StopBeingDemolishable();
-                        }
-                    }
-
-                    // Set rotatable state
-                    if (block.blockDefinition.canRotateAfterPlacement)
-                    {
-                        time_sec = Convert.ToInt32(Config["BuildRotatableTimeSec"]);
-                        if (time_sec < 0)
-                        {
-                            SetRotatableTime(block, time_sec);
-                        }
-                        else
-                        {
-                            time_diff = time_sec - (GetCurrentTimestamp() - _server.BuildingBlocks[block.net.ID].CreatedTimestamp);
-                            if (time_diff > 0)
-                            {
-                                SetRotatableTime(block, time_diff);
-                            }
-                            else
-                            {
-                                block.StopBeingRotatable();
-                            }
-                        }
-                    }
+                    // Update Demolishable/Rotatable time
+                    UpdateBuildingBlockState(block);
                 }
             }
         }
@@ -561,6 +521,9 @@ namespace Oxide.Plugins
                         CreatedTimestamp = GetCurrentTimestamp(),
                     });
                 }
+
+                // Update Demolishable/Rotatable time
+                UpdateBuildingBlockState(block);
             }
         }
         private void OnEntityBuilt(Planner plan, UnityEngine.GameObject obj)
@@ -1014,6 +977,52 @@ namespace Oxide.Plugins
                 if (seconds > 0f)
                 {
                     block.Invoke(block.StopBeingRotatable, seconds);
+                }
+            }
+        }
+        private void UpdateBuildingBlockState(BuildingBlock block)
+        {
+            Int32 time_sec;
+            Int64 time_diff;
+
+            // Set demolishable state
+            time_sec = Convert.ToInt32(Config["BuildDemolishableTimeSec"]);
+            if (time_sec < 0)
+            {
+                SetDemolishableTime(block, time_sec);
+            }
+            else
+            {
+                time_diff = time_sec - (GetCurrentTimestamp() - _server.BuildingBlocks[block.net.ID].CreatedTimestamp);
+                if (time_diff > 0)
+                {
+                    SetDemolishableTime(block, time_diff);
+                }
+                else
+                {
+                    block.StopBeingDemolishable();
+                }
+            }
+
+            // Set rotatable state
+            if (block.blockDefinition.canRotateAfterPlacement)
+            {
+                time_sec = Convert.ToInt32(Config["BuildRotatableTimeSec"]);
+                if (time_sec < 0)
+                {
+                    SetRotatableTime(block, time_sec);
+                }
+                else
+                {
+                    time_diff = time_sec - (GetCurrentTimestamp() - _server.BuildingBlocks[block.net.ID].CreatedTimestamp);
+                    if (time_diff > 0)
+                    {
+                        SetRotatableTime(block, time_diff);
+                    }
+                    else
+                    {
+                        block.StopBeingRotatable();
+                    }
                 }
             }
         }
