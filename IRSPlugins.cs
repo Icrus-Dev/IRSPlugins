@@ -23,7 +23,7 @@ using ProtoBuf;
 
 namespace Oxide.Plugins
 {
-    [Info("IRSPlugins", "Icrus", "0.3.4")]
+    [Info("IRSPlugins", "Icrus", "0.3.5")]
     [Description("Private server plugin package")]
     public class IRSPlugins : RustPlugin
     {
@@ -144,12 +144,8 @@ namespace Oxide.Plugins
             // Save user data and dispose user object
             foreach (var i in _users)
             {
-                ProtoStorage.Save(i.Value.UserData, "IRSUserData", i.Value.IdString);
                 i.Value.Dispose();
             }
-
-            // Save server data
-            SaveServerData();
 
             // Finalize
             _users.Clear();
@@ -394,6 +390,17 @@ namespace Oxide.Plugins
                 }
             }
         }
+        private void OnServerSave()
+        {
+            // Save user data and dispose user object
+            foreach (var i in _users)
+            {
+                ProtoStorage.Save(i.Value.UserData, "IRSUserData", i.Value.IdString);
+            }
+
+            // Save server data
+            ProtoStorage.Save(_server, "IRSServer");
+        }
         private void OnPlayerConnected(BasePlayer player)
         {
             // Register user object
@@ -507,24 +514,28 @@ namespace Oxide.Plugins
         }
         private void OnEntitySpawned(BaseNetworkable entity)
         {
-            if (entity != null && entity.net != null && entity is BuildingBlock)
+            if (entity != null)
             {
-                // Retrieve building block
-                var block = entity as BuildingBlock;
-
-                // Register building block
-                if (!_server.BuildingBlocks.ContainsKey(block.net.ID))
+                if (entity is BuildingBlock)
                 {
-                    _server.BuildingBlocks.Add(block.net.ID, new IRSBuildingBlock()
-                    {
-                        BuildingId = block.buildingID,
-                        CreatedTimestamp = GetCurrentTimestamp(),
-                    });
-                }
+                    // Retrieve building block
+                    var block = entity as BuildingBlock;
 
-                // Update Demolishable/Rotatable time
-                UpdateBuildingBlockState(block);
+                    // Register building block
+                    if (!_server.BuildingBlocks.ContainsKey(block.net.ID))
+                    {
+                        _server.BuildingBlocks.Add(block.net.ID, new IRSBuildingBlock()
+                        {
+                            BuildingId = block.buildingID,
+                            CreatedTimestamp = GetCurrentTimestamp(),
+                        });
+                    }
+
+                    // Update Demolishable/Rotatable time
+                    UpdateBuildingBlockState(block);
+                }
             }
+
         }
         private void OnEntityBuilt(Planner plan, UnityEngine.GameObject obj)
         {
@@ -732,6 +743,7 @@ namespace Oxide.Plugins
         #endregion
 
         #region ChatCommands
+        // 일반
         [ChatCommand("auth")]
         private void TryAuthentication(BasePlayer player, String command, String[] args)
         {
@@ -815,6 +827,25 @@ namespace Oxide.Plugins
 
                 // Show reset message
                 ShowMessage(player, "DefaultBuildingBlockGradeReset");
+            }
+        }
+
+        // 어드민
+        [ChatCommand("skin_panel_reset")]
+        private void TrySkinPanelReset(BasePlayer player, String command, String[] args)
+        {
+            if (IsAdmin(player) && args.Length > 0)
+            {
+                var player_target = BasePlayer.activePlayerList.FirstOrDefault((x) => x.displayName.Equals(args[0], StringComparison.InvariantCultureIgnoreCase));
+                if (player_target != null)
+                {
+                    CloseSkinContainerUI(player_target);
+                    ShowMessage(player, "SkinPanelResetSuccess", player_target.displayName);
+                }
+                else
+                {
+                    ShowMessage(player, "SkinPanelUserNotFound");
+                }
             }
         }
 
@@ -1333,8 +1364,11 @@ namespace Oxide.Plugins
             // Default building block grade
             Config["DefaultBuildingBlockGradeEnabled"] = Config["DefaultBuildingBlockGradeEnabled"] ?? true;
 
-            // TODO : Building privilege expansion
-            Config["PrivilegeExpansionEnabled"] = Config["PrivilegeExpansionEnabled"] ?? true;
+            //// TODO? : Make deployable on building block
+            //Config["MakeDeployableOnBuildingBlockEnabled"] = Config["MakeDeployableOnBuildingBlockEnabled"] ?? true;
+
+            //// TODO? : Building privilege expansion
+            //Config["PrivilegeExpansionEnabled"] = Config["PrivilegeExpansionEnabled"] ?? true;
 
             SaveConfig();
         }
@@ -1356,6 +1390,8 @@ namespace Oxide.Plugins
                 ["AuthChatForbidden"] = "You can't chat before authentication.",
 
                 ["SkinNotFound"] = "Skin not found.",
+                ["SkinPanelResetSuccess"] = "Skin panel reset successfully ({0}).",
+                ["SkinPanelUserNotFound"] = "User not found.",
 
                 ["DefaultBuildingBlockGradeSet"] = "Default building block grade changed to '{0}' successfully.",
                 ["DefaultBuildingBlockGradeReset"] = "Reset default building block grade successfully.",
@@ -1377,6 +1413,8 @@ namespace Oxide.Plugins
                 ["AuthChatForbidden"] = "인증 전까지 채팅을 칠 수 없습니다.",
 
                 ["SkinNotFound"] = "스킨을 찾을 수 없습니다.",
+                ["SkinPanelResetSuccess"] = "스킨 패널을 성공적으로 초기화하였습니다 ({0}).",
+                ["SkinPanelUserNotFound"] = "유저를 찾을 수 없습니다.",
 
                 ["DefaultBuildingBlockGradeSet"] = "건설되는 블록의 기본 등급이 '{0}' 로 성공적으로 적용되었습니다.",
                 ["DefaultBuildingBlockGradeReset"] = "건설되는 블록의 기본 등급이 성공적으로 초기화되었습니다.",
@@ -1390,7 +1428,7 @@ namespace Oxide.Plugins
                 _server = new IRSServer();
                 _server.BuildingBlocks = new Dictionary<UInt64, IRSBuildingBlock>();
 
-                SaveServerData();
+                ProtoStorage.Save(_server, "IRSServer");
             }
             else
             {
@@ -1400,10 +1438,6 @@ namespace Oxide.Plugins
                     _server.BuildingBlocks = new Dictionary<UInt64, IRSBuildingBlock>();
                 }
             }
-        }
-        private void SaveServerData()
-        {
-            ProtoStorage.Save(_server, "IRSServer");
         }
 
         private void ShowMessage(BasePlayer player, String key, params Object[] args)
